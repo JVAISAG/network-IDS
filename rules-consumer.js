@@ -10,51 +10,28 @@
  * Run this in a separate terminal from the ingestion API.
  */
 
+const { correlate } = require("./lib/correlator");
 require("dotenv").config();
 const Redis = require("ioredis");
 
 const STREAM_KEY = process.env.STREAM_KEY || "security-events";
-const CORRELATION_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const DISTINCT_TYPES_TO_ESCALATE = 2;
 
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
-// In-memory sliding window per source IP.
-// For a real deployment you'd move this to Redis too (e.g. sorted sets)
-// so state survives a consumer restart — fine to note as a "next step"
-// in your README, don't over-engineer it before it's needed.
-const activity = new Map(); // src_ip -> [{ type, ts }]
-
-function pruneOld(events) {
-  const cutoff = Date.now() - CORRELATION_WINDOW_MS;
-  return events.filter((e) => e.ts >= cutoff);
-}
+const activity = new Map();
 
 function handleEvent(fields) {
-  const event = {};
-  for (let i = 0; i < fields.length; i += 2) {
-    event[fields[i]] = fields[i + 1];
-  }
-
-  const srcIp = event.src_ip;
-  const existing = activity.get(srcIp) || [];
-  const pruned = pruneOld(existing);
-  pruned.push({ type: event.event_type, ts: Date.now() });
-  activity.set(srcIp, pruned);
-
-  const distinctTypes = new Set(pruned.map((e) => e.type));
+  const { event, srcIp, distinctTypes, escalated } = correlate(fields, activity);
 
   console.log(
     `[event] ${event.source} ${event.event_type} from ${srcIp} (severity=${event.severity})`
   );
 
-  if (distinctTypes.size >= DISTINCT_TYPES_TO_ESCALATE) {
+  if (escalated) {
     console.log(
-      `[ESCALATED] ${srcIp} triggered ${distinctTypes.size} distinct event types ` +
-      `in the last ${CORRELATION_WINDOW_MS / 1000}s: [${[...distinctTypes].join(", ")}]`
+      `[ESCALATED] ${srcIp} triggered ${distinctTypes.length} distinct event types ` +
+      `in the last 300s: [${distinctTypes.join(", ")}]`
     );
-    // Next step: write this escalation to Mongo / push to the dashboard
-    // over Socket.io instead of just logging it.
   }
 }
 
