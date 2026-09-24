@@ -38,9 +38,9 @@ Write-Host "      PID $($rulesJob.Id)" -ForegroundColor Green
 $scorerJob = $null
 if (-not $NoScorer) {
   Write-Host "[4/5] Starting ML scorer on port 8000..." -ForegroundColor Yellow
-  $scorerJob = Start-Process -NoNewWindow -FilePath "D:\projects\networkids\ml-scorer\.venv\Scripts\python.exe" `
+  $scorerJob = Start-Process -NoNewWindow -FilePath "$PSScriptRoot\ml-scorer\.venv\Scripts\python.exe" `
     -ArgumentList "-m", "uvicorn", "main:app", "--port", "8000" `
-    -WorkingDirectory "D:\projects\networkids\ml-scorer" -PassThru
+    -WorkingDirectory "$PSScriptRoot\ml-scorer" -PassThru
   Start-Sleep -Seconds 3
   Write-Host "      PID $($scorerJob.Id)" -ForegroundColor Green
 }
@@ -55,7 +55,7 @@ Write-Host "      PID $($bcastJob.Id)" -ForegroundColor Green
 $dashJob = $null
 if (-not $NoDashboard) {
   Write-Host "[+] Starting dashboard on port 3000..." -ForegroundColor Yellow
-  $dashJob = Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npx next dev" -WorkingDirectory "D:\projects\networkids\dashboard" -PassThru
+  $dashJob = Start-Process -NoNewWindow -FilePath "cmd.exe" -ArgumentList "/c npx next dev" -WorkingDirectory "$PSScriptRoot\dashboard" -PassThru
   Start-Sleep -Seconds 5
   Write-Host "      PID $($dashJob.Id)" -ForegroundColor Green
 }

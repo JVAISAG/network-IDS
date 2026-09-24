@@ -8,15 +8,10 @@ interface Props {
 }
 
 export default function EventTable({ events, onSelectIp }: Props) {
-  // Build a set of IPs that have >=2 distinct event types
-  const distinctCounts = new Map<string, Set<string>>();
-  for (const e of events) {
-    if (!distinctCounts.has(e.src_ip)) distinctCounts.set(e.src_ip, new Set());
-    distinctCounts.get(e.src_ip)!.add(e.event_type);
-  }
+  // Build a set of IPs that have been escalated
   const escalatedIps = new Set<string>();
-  for (const [ip, types] of distinctCounts) {
-    if (types.size >= 2) escalatedIps.add(ip);
+  for (const e of events) {
+    if (e.event_type === "escalation") escalatedIps.add(e.src_ip);
   }
 
   return (

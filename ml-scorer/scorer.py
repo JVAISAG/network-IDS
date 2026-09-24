@@ -95,9 +95,16 @@ class AnomalyScorer:
         if not self._trained:
             return 0.0
 
-        X = np.array([features], dtype=np.float64)
-        raw = float(self._model.decision_function(X)[0])
-        return float(1.0 / (1.0 + np.exp(raw)))
+        X_buffer = np.array(self._buffer, dtype=np.float64)
+        X_new = np.array([features], dtype=np.float64)
+        
+        raw_new = float(self._model.score_samples(X_new)[0])
+        raw_buffer = self._model.score_samples(X_buffer)
+        
+        # lower raw score = more anomalous.
+        # percentile of items >= raw_new gives [0, 1] where 1 is highly anomalous.
+        score = float(np.mean(raw_buffer >= raw_new))
+        return score
 
     def _retrain(self) -> None:
         if len(self._buffer) < self.min_samples:

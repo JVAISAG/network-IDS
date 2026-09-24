@@ -37,9 +37,13 @@ async function main() {
     if (!e.message.includes("BUSYGROUP")) throw e;
   }
 
+  // Create Mongo indexes
+  await eventsCol.createIndex({ src_ip: 1, _id: -1 });
+  await alertsCol.createIndex({ event_id: 1 });
+
   const app = express();
   const httpServer = createServer(app);
-  const io = new Server(httpServer, { cors: { origin: "*" } });
+  const io = new Server(httpServer, { cors: { origin: process.env.DASHBOARD_URL || "http://localhost:3000" } });
   app.use(express.json());
 
   // ── Redis stream consumer ──────────────────────────────────────

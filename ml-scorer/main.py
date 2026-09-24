@@ -1,5 +1,6 @@
 import os
 import asyncio
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -13,6 +14,8 @@ STREAM_KEY = os.getenv("STREAM_KEY", "security-events")
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "xdr")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "security-alerts")
+GROUP = "ml-scorer-group"
+CONSUMER = f"scorer-{os.getpid()}"
 
 extractor = FeatureExtractor()
 scorer = AnomalyScorer()
@@ -23,6 +26,12 @@ async def lifespan(app: FastAPI):
     redis = aioredis.from_url(REDIS_URL, decode_responses=True)
     mongo = AsyncIOMotorClient(MONGO_URL)
     collection = mongo[MONGO_DB][MONGO_COLLECTION]
+
+    try:
+        await redis.xgroup_create(STREAM_KEY, GROUP, "$", mkstream=True)
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            print(f"Group create error: {e}")
 
     consumer_task = asyncio.create_task(_consume_loop(redis, collection))
 
@@ -37,21 +46,38 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="ML Scorer")
 
 
+async def _reclaim(redis, collection):
+    try:
+        # XAUTOCLAIM returns (next_start_id, [entries], [deleted_ids])
+        # We reclaim messages idle for > 10000ms
+        res = await redis.xautoclaim(STREAM_KEY, GROUP, CONSUMER, 10000, "0-0", count=100)
+        if res and len(res) > 1 and res[1]:
+            for entry_id, fields in res[1]:
+                await _process_event(entry_id, fields, collection)
+                await redis.xack(STREAM_KEY, GROUP, entry_id)
+    except Exception as e:
+        print(f"Reclaim error: {e}")
+
+
 async def _consume_loop(redis, collection):
-    last_id = "$"
+    import random
     while True:
         try:
-            results = await redis.xread(
-                streams={STREAM_KEY: last_id},
+            results = await redis.xreadgroup(
+                GROUP, CONSUMER,
+                {STREAM_KEY: ">"},
                 block=5000,
                 count=10,
             )
-            if not results:
-                continue
-            for _stream_name, entries in results:
-                for entry_id, fields in entries:
-                    await _process_event(entry_id, fields, collection)
-                    last_id = entry_id
+            if results:
+                for _stream_name, entries in results:
+                    for entry_id, fields in entries:
+                        await _process_event(entry_id, fields, collection)
+                        await redis.xack(STREAM_KEY, GROUP, entry_id)
+            
+            if random.random() < 0.1:
+                await _reclaim(redis, collection)
+                
         except Exception as exc:
             print(f"[ml-scorer] consumer error: {exc}")
             await asyncio.sleep(2)
@@ -69,9 +95,15 @@ async def _process_event(entry_id, fields, collection):
         severity=severity,
         detail_str=detail_str,
     )
-    score = scorer.score(features)
+    
+    loop = asyncio.get_running_loop()
+    score = await loop.run_in_executor(None, scorer.score, features)
 
-    doc = {"event_id": entry_id, "anomaly_score": score}
+    doc = {
+        "event_id": entry_id, 
+        "anomaly_score": score,
+        "_created_at": datetime.now(timezone.utc)
+    }
     await collection.insert_one(doc)
     print(f"[scored] {entry_id}  ip={src_ip}  score={score:.4f}")
 

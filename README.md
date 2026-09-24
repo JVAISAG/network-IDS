@@ -17,8 +17,8 @@ live dashboard.
                     │ security-events │
                     └──┬──────────┬───┘
                        │          │
-          XREADGROUP   │          │  XREAD (separate
-          (broadcast)  │          │  consumer group)
+          XREADGROUP   │          │  XREADGROUP
+          (broadcast)  │          │  (rules)
                        ▼          ▼
             ┌──────────────┐  ┌──────────────┐
             │ broadcast-   │  │ rules-       │
@@ -134,6 +134,6 @@ Now real sniffed traffic flows through the same pipeline as the test events.
 ## What's next (in order)
 1. ✅ Ingestion API + Redis Stream + rules consumer
 2. Wire the real IDS into it (few lines, see above)
-3. ✅ Python ML scorer service (Isolation Forest on distinct_ports, event_rate)
+3. ✅ Python ML scorer service (Isolation Forest on severity, event_count, distinct_types, distinct_ports)
 4. ✅ Broadcast server + live dashboard (Next.js, Socket.io)
 5. Docker Compose for the whole stack; optional cloud/K8s deploy

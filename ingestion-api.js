@@ -10,37 +10,54 @@
 require("dotenv").config();
 const express = require("express");
 const Redis = require("ioredis");
+const rateLimit = require("express-rate-limit");
+const { z } = require("zod");
+const cors = require("cors");
 
 const PORT = process.env.PORT || 4000;
 const STREAM_KEY = process.env.STREAM_KEY || "security-events";
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 const app = express();
+app.use(cors({ origin: process.env.DASHBOARD_URL || "http://localhost:3000" }));
 app.use(express.json());
 
-// Basic shape every event must have. Keep this loose on purpose —
-// different sources (IDS, auth logs, cloud logs) will have different
-// payloads, but every event needs enough to correlate on.
-function validateEvent(body) {
-  const errors = [];
-  if (!body.source) errors.push("source is required (e.g. 'ids', 'auth-log')");
-  if (!body.src_ip) errors.push("src_ip is required");
-  if (!body.event_type) errors.push("event_type is required (e.g. 'port_scan', 'syn_flood', 'failed_login')");
-  return errors;
-}
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 1000,
+});
+app.use("/events", limiter);
+
+const API_KEY = process.env.API_KEY || "dev-secret-key";
+app.use("/events", (req, res, next) => {
+  const auth = req.headers["authorization"];
+  if (auth !== `Bearer ${API_KEY}`) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  next();
+});
+
+const eventSchema = z.object({
+  source: z.string().min(1),
+  src_ip: z.string().ip(),
+  event_type: z.string().min(1),
+  severity: z.enum(["low", "medium", "high"]).optional().default("low"),
+  detail: z.record(z.any()).optional().default({}),
+});
 
 app.post("/events", async (req, res) => {
-  const errors = validateEvent(req.body);
-  if (errors.length) {
-    return res.status(400).json({ ok: false, errors });
+  const parsed = eventSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, errors: parsed.error.errors });
   }
+  const body = parsed.data;
 
   const event = {
-    source: req.body.source,
-    src_ip: req.body.src_ip,
-    event_type: req.body.event_type,
-    severity: req.body.severity || "low",
-    detail: JSON.stringify(req.body.detail || {}),
+    source: body.source,
+    src_ip: body.src_ip,
+    event_type: body.event_type,
+    severity: body.severity,
+    detail: JSON.stringify(body.detail),
     received_at: new Date().toISOString(),
   };
 
@@ -48,6 +65,7 @@ app.post("/events", async (req, res) => {
     // XADD with '*' lets Redis auto-generate a unique, ordered entry ID.
     const id = await redis.xadd(
       STREAM_KEY,
+      "MAXLEN", "~", "1000000",
       "*",
       "source", event.source,
       "src_ip", event.src_ip,
@@ -72,7 +90,11 @@ app.get("/health", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Ingestion API listening on http://localhost:${PORT}`);
-  console.log(`POST events to /events, pushed onto stream "${STREAM_KEY}"`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Ingestion API listening on http://localhost:${PORT}`);
+    console.log(`POST events to /events, pushed onto stream "${STREAM_KEY}"`);
+  });
+}
+
+module.exports = app;
